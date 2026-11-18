@@ -71,7 +71,7 @@
     const { useState, useEffect, useRef, useMemo } = React;
 
     // ==========================================
-    // 1. 定数・6名のバディ完全定義（GitHub Pages対応の相対パス）
+    // 1. 定数・6名のバディ完全定義（ナチュラル音声パラメータ＆相対パス対応）
     // ==========================================
     const STORAGE_KEY = "companion_diet_app_data";
 
@@ -83,7 +83,8 @@
         emoji: "🎀",
         themeColor: "#ec4899",
         lightBg: "#fdf2f8",
-        voice: { pitch: 1.3, rate: 1.1 },
+        // 波形劣化を防ぐナチュラルな高音・やや早口設定（女性ボイス優先）
+        voice: { pitch: 1.09, rate: 1.05, isMale: false },
         assets: {
           neutral: "images/buddies/riko_neutral.png",
           angry: "images/buddies/riko_angry.png",
@@ -126,7 +127,8 @@
         emoji: "🔥",
         themeColor: "#dc2626",
         lightBg: "#fef2f2",
-        voice: { pitch: 0.7, rate: 1.05 },
+        // 声が割れない自然な低音・ハキハキ話速（男性ボイス優先）
+        voice: { pitch: 0.88, rate: 1.03, isMale: true },
         assets: {
           neutral: "images/buddies/jinai_neutral.png",
           angry: "images/buddies/jinai_angry.png",
@@ -169,7 +171,8 @@
         emoji: "☕",
         themeColor: "#4b5563",
         lightBg: "#f3f4f6",
-        voice: { pitch: 0.85, rate: 0.95 },
+        // 落ち着いたトーン（男性ボイス優先）
+        voice: { pitch: 0.93, rate: 0.98, isMale: true },
         assets: {
           neutral: "images/buddies/allen_neutral.png",
           angry: "images/buddies/allen_angry.png",
@@ -212,7 +215,8 @@
         emoji: "☀️",
         themeColor: "#f59e0b",
         lightBg: "#fffbeb",
-        voice: { pitch: 1.2, rate: 1.15 },
+        // 元気で明るいトーン（女性ボイス優先）
+        voice: { pitch: 1.07, rate: 1.07, isMale: false },
         assets: {
           neutral: "images/buddies/sora_neutral.png",
           angry: "images/buddies/sora_angry.png",
@@ -255,7 +259,8 @@
         emoji: "🌸",
         themeColor: "#10b981",
         lightBg: "#ecfdf5",
-        voice: { pitch: 1.05, rate: 0.92 },
+        // 穏やかで優しいお姉さんトーン（女性ボイス優先）
+        voice: { pitch: 1.02, rate: 0.94, isMale: false },
         assets: {
           neutral: "images/buddies/shizuka_neutral.png",
           angry: "images/buddies/shizuka_angry.png",
@@ -298,7 +303,8 @@
         emoji: "🔍",
         themeColor: "#6366f1",
         lightBg: "#eef2ff",
-        voice: { pitch: 0.95, rate: 1.05 },
+        // クールで知的なトーン（女性ボイス優先）
+        voice: { pitch: 0.96, rate: 1.04, isMale: false },
         assets: {
           neutral: "images/buddies/selena_neutral.png",
           angry: "images/buddies/selena_angry.png",
@@ -352,8 +358,151 @@
     };
 
     // ==========================================
-    // 2. ユーティリティ関数
+    // 2. ユーティリティ関数 & ナチュラル音声合成エンジン（アイデア1＋アイデア3）
     // ==========================================
+    // 音声リストの事前ウォームアップ（Safari / Chrome 初回無音対策）
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.getVoices();
+      };
+    }
+
+    // 非同期通信(AI解析)の前にユーザー操作イベント内で音声ロックを解除する関数
+    const unlockSpeechSynthesis = () => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+      try {
+        const silent = new SpeechSynthesisUtterance("");
+        silent.volume = 0;
+        window.speechSynthesis.speak(silent);
+      } catch (e) {}
+    };
+
+    // 【アイデア3】読み上げテキストを自然な日本語発音・息継ぎにクレンジングする関数
+    const formatTextForNaturalSpeech = (rawText) => {
+      if (!rawText) return "";
+      return rawText
+        // 絵文字・装飾記号の除去（絵文字を読み上げて不自然になるのを防ぐ）
+        .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "")
+        // 栄養素や単位を自然な日本語読みに変換
+        .replace(/kcal/gi, "キロカロリー")
+        .replace(/Lv\.?\s*(\d+)/gi, "レベル$1")
+        .replace(/\+\s*(\d+)\s*EXP/gi, "プラス$1経験値")
+        .replace(/EXP/gi, "経験値")
+        .replace(/PFC/gi, "ピーエフシー")
+        .replace(/BMR/gi, "基礎代謝")
+        .replace(/P:\s*([\d.]+)\s*g/gi, "タンパク質$1グラム")
+        .replace(/F:\s*([\d.]+)\s*g/gi, "脂質$1グラム")
+        .replace(/C:\s*([\d.]+)\s*g/gi, "炭水化物$1グラム")
+        .replace(/([\d.]+)\s*kg/gi, "$1キロ")
+        .replace(/([\d.]+)\s*g/g, "$1グラム")
+        .replace(/100%/g, "ひゃくパーセント")
+        .replace(/(\d+)%/g, "$1パーセント")
+        // カッコやスラッシュを読点（息継ぎの間）に変換
+        .replace(/[\/／]/g, "、")
+        .replace(/[「」『』（）()【】]/g, "、")
+        // 感嘆符・三点リーダーの後に自然な「間」を作る
+        .replace(/！+/g, "！ ")
+        .replace(/？+/g, "？ ")
+        .replace(/…+/g, "、 ")
+        .replace(/、+/g, "、")
+        .trim();
+    };
+
+    // 利用可能な日本語ボイス一覧を取得するヘルパー
+    const getAvailableJapaneseVoices = () => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+      const all = window.speechSynthesis.getVoices() || [];
+      return all.filter((v) => v.lang && (v.lang.includes("ja") || v.lang.includes("JP")));
+    };
+
+    // 【アイデア1】端末内で最も自然な高音質ニューラル日本語ボイス（男女別）を自動厳選する関数
+    const selectBestJapaneseVoice = (voices, isMaleCharacter, preferredVoiceURI = "") => {
+      const jpVoices = voices.filter(
+        (v) => v.lang && (v.lang.includes("ja") || v.lang.includes("JP"))
+      );
+      if (jpVoices.length === 0) return null;
+
+      // ユーザーが設定画面でお気に入りボイスを明示指定している場合はそれを最優先
+      if (preferredVoiceURI) {
+        const userPicked = jpVoices.find((v) => v.voiceURI === preferredVoiceURI || v.name === preferredVoiceURI);
+        if (userPicked) return userPicked;
+      }
+
+      // 男性キャラ・女性キャラ別の高音質ボイス優先キーワード順位
+      const malePriority = ["Keita", "Otoya", "Ichiro", "Takumi", "Daichi", "Google 日本語", "Siri", "Natural", "Online"];
+      const femalePriority = ["Nanami", "Kyoko", "O-Ren", "Hattori", "Google 日本語", "Siri", "Haruka", "Ayumi", "Sayaka", "Natural", "Online"];
+      const priorityList = isMaleCharacter ? malePriority : femalePriority;
+
+      // ステップ1: Online (Natural) / Enhanced / Premium / Siri などのニューラル高音質ボイスを最優先で探す
+      for (const keyword of priorityList) {
+        const neuralMatch = jpVoices.find(
+          (v) =>
+            v.name.includes(keyword) &&
+            (v.name.includes("Natural") ||
+              v.name.includes("Online") ||
+              v.name.includes("Enhanced") ||
+              v.name.includes("Premium") ||
+              v.name.includes("Siri"))
+        );
+        if (neuralMatch) return neuralMatch;
+      }
+
+      // ステップ2: 汎用的なNatural / Online / Enhanced ボイスを探す
+      const anyNeural = jpVoices.find(
+        (v) =>
+          v.name.includes("Natural") ||
+          v.name.includes("Online") ||
+          v.name.includes("Enhanced") ||
+          v.name.includes("Premium")
+      );
+      if (anyNeural && !isMaleCharacter) return anyNeural;
+
+      // ステップ3: キーワードに合致する標準ボイス（Google 日本語 / Kyoko / Otoya 等）を探す
+      for (const keyword of priorityList) {
+        const stdMatch = jpVoices.find((v) => v.name.includes(keyword));
+        if (stdMatch) return stdMatch;
+      }
+
+      return jpVoices[0];
+    };
+
+    // メイン音声発話関数
+    const speakBuddyDialogue = (text, buddyId, voiceEnabled, preferredVoiceURI = "") => {
+      if (!voiceEnabled || typeof window === "undefined" || !("speechSynthesis" in window) || !text) return;
+      try {
+        const synth = window.speechSynthesis;
+        synth.cancel();
+        if (synth.paused) synth.resume();
+
+        const cleanText = formatTextForNaturalSpeech(text);
+        if (!cleanText) return;
+
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.lang = "ja-JP";
+        utterance.volume = 1.0;
+
+        const voiceConfig = BUDDY_DEFINITIONS[buddyId]?.voice || { pitch: 1.0, rate: 1.0, isMale: false };
+        utterance.pitch = voiceConfig.pitch;
+        utterance.rate = voiceConfig.rate;
+
+        const voices = synth.getVoices();
+        if (voices && voices.length > 0) {
+          const bestVoice = selectBestJapaneseVoice(voices, voiceConfig.isMale, preferredVoiceURI);
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+          }
+        }
+
+        // cancel()直後にspeak()すると消えるブラウザバグを防ぐため45ms遅延
+        setTimeout(() => {
+          synth.speak(utterance);
+        }, 45);
+      } catch (err) {
+        console.warn("Speech synthesis failed:", err);
+      }
+    };
+
     const getJSTDateString = (dateObj = new Date()) => {
       const jstOffset = 9 * 60;
       const localOffset = dateObj.getTimezoneOffset();
@@ -440,24 +589,6 @@
       const next = thresholds[lv];
       const percent = Math.min(100, Math.max(0, Math.round(((e - start) / (next - start)) * 100)));
       return { level: lv, current: e, next, percent };
-    };
-
-    const speakBuddyDialogue = (text, buddyId, voiceEnabled) => {
-      if (!voiceEnabled || typeof window === "undefined" || !("speechSynthesis" in window) || !text) return;
-      try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "ja-JP";
-        const voiceConfig = BUDDY_DEFINITIONS[buddyId]?.voice || { pitch: 1.0, rate: 1.0 };
-        utterance.pitch = voiceConfig.pitch;
-        utterance.rate = voiceConfig.rate;
-        const voices = window.speechSynthesis.getVoices();
-        const jpVoice = voices.find(v => v.lang && (v.lang.includes("ja") || v.lang.includes("JP")));
-        if (jpVoice) utterance.voice = jpVoice;
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn("Speech synthesis failed:", err);
-      }
     };
 
     const compressImageToBase64 = (file) => {
@@ -692,13 +823,15 @@
     };
 
     // ==========================================
-    // 4. 初期設定＆プロフィール編集モーダル
+    // 4. 初期設定＆プロフィール編集モーダル（日本語ボイス選択＆試聴機能つき）
     // ==========================================
     const ProfileOnboardingModal = ({ isOpen, initialData, isForced, onSave, onClose }) => {
       if (!isOpen) return null;
 
       const profile = initialData?.user_profile || {};
       const [apiKey, setApiKey] = useState(initialData?.api_key || "");
+      const [preferredVoiceURI, setPreferredVoiceURI] = useState(initialData?.preferred_voice_uri || "");
+      const [availableVoices, setAvailableVoices] = useState([]);
       const [nickname, setNickname] = useState(profile.nickname || "");
       const [gender, setGender] = useState(profile.gender || "male");
       const [age, setAge] = useState(profile.age || 35);
@@ -709,6 +842,16 @@
       const [selectedBuddy, setSelectedBuddy] = useState(profile.selected_buddy || "riko");
       const [errorMsg, setErrorMsg] = useState("");
 
+      useEffect(() => {
+        const updateVoices = () => {
+          setAvailableVoices(getAvailableJapaneseVoices());
+        };
+        updateVoices();
+        if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          window.speechSynthesis.onvoiceschanged = updateVoices;
+        }
+      }, []);
+
       const previewCalc = useMemo(() => {
         return calculateBMRAndTarget(gender, currentWeight, height, age, activityLevel);
       }, [gender, currentWeight, height, age, activityLevel]);
@@ -716,6 +859,12 @@
       const previewPFC = useMemo(() => {
         return calculateTargetPFC(previewCalc.targetCalories, gender);
       }, [previewCalc.targetCalories, gender]);
+
+      const handleTestVoice = () => {
+        const b = BUDDY_DEFINITIONS[selectedBuddy] || BUDDY_DEFINITIONS.riko;
+        const sampleText = b.quotes[1][0];
+        speakBuddyDialogue(sampleText, b.id, true, preferredVoiceURI);
+      };
 
       const handleSubmit = (e) => {
         e.preventDefault();
@@ -734,6 +883,7 @@
 
         onSave({
           apiKey: apiKey.trim(),
+          preferredVoiceURI,
           nickname: nickname.trim(),
           gender,
           age: a,
@@ -754,7 +904,7 @@
               <div>
                 <span className="text-xs font-bold text-emerald-600 block">AIコンパニオンと</span>
                 <h2 className="text-lg font-extrabold text-gray-800">
-                  {isForced ? "🎉 はじめにプロフィール設定" : "⚙️ プロフィール・API設定"}
+                  {isForced ? "🎉 はじめにプロフィール設定" : "⚙️ プロフィール・音声・API設定"}
                 </h2>
               </div>
               {!isForced && (
@@ -907,6 +1057,37 @@
                 </div>
               </div>
 
+              {/* ナチュラル日本語ボイス選択＆試聴 */}
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-gray-700">
+                    🎙️ 日本語読み上げボイスの種類
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleTestVoice}
+                    className="text-[11px] bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold px-2.5 py-1 rounded-lg transition"
+                  >
+                    🔈 今の設定で試聴
+                  </button>
+                </div>
+                <select
+                  value={preferredVoiceURI}
+                  onChange={(e) => setPreferredVoiceURI(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-2.5 py-2 bg-white text-xs"
+                >
+                  <option value="">✨ 自動最適化（キャラの性別に合う高音質ボイスを自動選択）</option>
+                  {availableVoices.map((v, idx) => (
+                    <option key={idx} value={v.voiceURI || v.name}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-gray-500">
+                  ※「Natural」「Online」「Google」「Kyoko」「Otoya」等が含まれるボイスを選ぶとより自然な発音になります。
+                </p>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">
                   Gemini API キー（写真AI解析・AI総評用 / 任意）
@@ -919,7 +1100,7 @@
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono"
                 />
                 <p className="text-[10px] text-gray-500 mt-1">
-                  ※キーはお使いのブラウザ(LocalStorage)にのみ保存されます。未設定でも手動記録・音声・ローカル総評がすべて動作します。
+                  ※キーはお使いのブラウザ(LocalStorage)にのみ保存されます。
                 </p>
               </div>
 
@@ -983,6 +1164,7 @@
       };
 
       const handleAnalyzePhoto = async () => {
+        unlockSpeechSynthesis();
         if (!compressedImg) {
           setErrorMsg("先に食事の写真を選択してください。");
           return;
@@ -1050,6 +1232,7 @@
 
       const handleSave = (e) => {
         e.preventDefault();
+        unlockSpeechSynthesis();
         if (!menuName.trim()) {
           setErrorMsg("メニュー名を入力してください。");
           return;
@@ -1583,6 +1766,7 @@
       if (!isOpen || !profile) return null;
 
       const handleAnalyzeWeekly = async () => {
+        unlockSpeechSynthesis();
         setIsAnalyzingWeekly(true);
         const lv = calculateLevelFromExp(appData.buddy_progress?.[currentBuddy.id]?.exp || 0);
 
@@ -1815,6 +1999,7 @@
             const parsed = JSON.parse(saved);
             return {
               api_key: parsed.api_key || "",
+              preferred_voice_uri: parsed.preferred_voice_uri || "",
               voice_enabled: parsed.voice_enabled ?? true,
               user_profile: parsed.user_profile || null,
               buddy_progress: { ...defaultBuddyProgress, ...(parsed.buddy_progress || {}) },
@@ -1831,6 +2016,7 @@
 
         return {
           api_key: "",
+          preferred_voice_uri: "",
           voice_enabled: true,
           user_profile: null,
           buddy_progress: defaultBuddyProgress,
@@ -1929,7 +2115,7 @@
           setBuddyEmotion("angry");
           setBuddyDialogue(scoldText);
           setTimeout(() => {
-            speakBuddyDialogue(scoldText, buddy.id, appData.voice_enabled);
+            speakBuddyDialogue(scoldText, buddy.id, appData.voice_enabled, appData.preferred_voice_uri);
           }, 300);
         } else if (bonusAwarded) {
           const msg = `昨日の摂取カロリーが目標範囲内だったので、達成ボーナス +30 EXP を獲得しました！${buddy.quotes[currentExpInfo.level]?.[0] || ""}`;
@@ -1937,7 +2123,7 @@
           setBuddyDialogue(msg);
           showToast("🎉 前日目標カロリー達成ボーナス +30 EXP！");
           setTimeout(() => {
-            speakBuddyDialogue(msg, buddy.id, appData.voice_enabled);
+            speakBuddyDialogue(msg, buddy.id, appData.voice_enabled, appData.preferred_voice_uri);
           }, 300);
         } else {
           const lvQuotes = buddy.quotes[currentExpInfo.level] || buddy.quotes[1];
@@ -1951,7 +2137,7 @@
         setBuddyEmotion(emotion);
         setBuddyDialogue(text);
         if (shouldSpeak) {
-          speakBuddyDialogue(text, currentBuddy.id, appData.voice_enabled);
+          speakBuddyDialogue(text, currentBuddy.id, appData.voice_enabled, appData.preferred_voice_uri);
         }
       };
 
@@ -2043,6 +2229,7 @@
       const hasDinner = selectedDayMeals.some((m) => m.meal_type === "dinner");
 
       const runDailyAIAdvice = async (mealsForDay, isThreeMealsJustCompleted = false) => {
+        unlockSpeechSynthesis();
         setIsAnalyzingDaily(true);
         const buddy = currentBuddy;
         const lv = currentExpInfo.level;
@@ -2113,6 +2300,7 @@
       };
 
       const handleSaveProfile = (formValues) => {
+        unlockSpeechSynthesis();
         const isFirstSetup = !appData.user_profile;
         const userId = appData.user_profile?.user_id || generateUUID();
 
@@ -2134,6 +2322,7 @@
         setAppData((prev) => ({
           ...prev,
           api_key: formValues.apiKey,
+          preferred_voice_uri: formValues.preferredVoiceURI || "",
           user_profile: newProfile
         }));
 
@@ -2141,11 +2330,11 @@
 
         const newBuddy = BUDDY_DEFINITIONS[formValues.selectedBuddy] || BUDDY_DEFINITIONS.riko;
         const greet = isFirstSetup
-          ? `${formValues.nickname}さん、はじめまして！${newBuddy.name}です！目標${formValues.targetWeight}kg（1日${formValues.targetCalories}kcal目標）に向けて、今日から一緒に頑張りましょうね！`
-          : `プロフィール設定を更新しましたよ！引き続き目標に向けて一緒に頑張りましょう！`;
+          ? `${formValues.nickname}さん、はじめまして！${newBuddy.name}です！目標${formValues.targetWeight}kg、1日${formValues.targetCalories}kcal目標に向けて、今日から一緒に頑張りましょうね！`
+          : `プロフィールと音声設定を更新しましたよ！引き続き目標に向けて一緒に頑張りましょう！`;
         setBuddyEmotion("smile");
         setBuddyDialogue(greet);
-        speakBuddyDialogue(greet, newBuddy.id, appData.voice_enabled);
+        speakBuddyDialogue(greet, newBuddy.id, appData.voice_enabled, formValues.preferredVoiceURI || "");
       };
 
       const handleSaveMealRecord = (newMeal) => {
@@ -2200,6 +2389,7 @@
 
       const handleSaveWeight = (e) => {
         e.preventDefault();
+        unlockSpeechSynthesis();
         const wVal = Number(weightInput);
         if (!wVal || wVal < 25 || wVal > 250) {
           showToast("⚠️ 正しい体重(kg)を入力してください");
@@ -2222,13 +2412,14 @@
         });
 
         const diffTarget = Math.max(0, roundedW - (appData.user_profile?.target_weight || roundedW)).toFixed(1);
-        const msg = `${selectedDate}の体重（${roundedW}kg）を記録しました！目標の${appData.user_profile?.target_weight}kgまであと${diffTarget}kgですね！`;
+        const msg = `${selectedDate}の体重、${roundedW}kgを記録しました！目標の${appData.user_profile?.target_weight}kgまで、あと${diffTarget}kgですね！`;
         showToast(`⚖️ 体重 ${roundedW}kg を保存しました！`);
         updateBuddySpeech(msg, "smile", true);
       };
 
       const handleSwitchBuddy = (newBuddyId) => {
         if (!BUDDY_DEFINITIONS[newBuddyId]) return;
+        unlockSpeechSynthesis();
         setAppData((prev) => ({
           ...prev,
           user_profile: {
@@ -2241,7 +2432,7 @@
         const quote = nextB.quotes[lv]?.[0] || nextB.quotes[1][0];
         setBuddyEmotion("smile");
         setBuddyDialogue(quote);
-        speakBuddyDialogue(quote, newBuddyId, appData.voice_enabled);
+        speakBuddyDialogue(quote, newBuddyId, appData.voice_enabled, appData.preferred_voice_uri);
         showToast(`🤝 パートナーを「${nextB.name}」に交代しました！`);
       };
 
@@ -2405,7 +2596,7 @@
                   </span>
                   <button
                     type="button"
-                    onClick={() => speakBuddyDialogue(buddyDialogue, currentBuddy.id, true)}
+                    onClick={() => speakBuddyDialogue(buddyDialogue, currentBuddy.id, true, appData.preferred_voice_uri)}
                     className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md flex items-center gap-1 transition"
                   >
                     <span>🔈 再生</span>
@@ -2683,7 +2874,7 @@
             ＋
           </button>
 
-          {/* モーダル群（タグ自動変換を防止するため React.createElement で安全に描画） */}
+          {/* モーダル群（React.createElement で安全に描画） */}
           {React.createElement(ProfileOnboardingModal, {
             isOpen: isProfileModalOpen || !appData.user_profile,
             initialData: appData,
