@@ -71,7 +71,7 @@
     const { useState, useEffect, useRef, useMemo } = React;
 
     // ==========================================
-    // 1. 定数・6名のバディ完全定義（ナチュラル音声パラメータ＆相対パス対応）
+    // 1. 定数・6名のバディ完全定義（Gemini AIネイティブボイス設定付き）
     // ==========================================
     const STORAGE_KEY = "companion_diet_app_data";
 
@@ -83,7 +83,8 @@
         emoji: "🎀",
         themeColor: "#ec4899",
         lightBg: "#fdf2f8",
-        // 波形劣化を防ぐナチュラルな高音・やや早口設定（女性ボイス優先）
+        geminiVoice: "Zephyr",
+        voiceStylePrompt: "ツンデレな若い女の子メイド「リコ」として、少し気が強くて可愛らしい感情豊かな日本語で読み上げてください",
         voice: { pitch: 1.09, rate: 1.05, isMale: false },
         assets: {
           neutral: "images/buddies/riko_neutral.png",
@@ -127,7 +128,8 @@
         emoji: "🔥",
         themeColor: "#dc2626",
         lightBg: "#fef2f2",
-        // 声が割れない自然な低音・ハキハキ話速（男性ボイス優先）
+        geminiVoice: "Fenrir",
+        voiceStylePrompt: "熱血で威厳のある軍隊式鬼教官「陣内」として、力強くハキハキとした熱い男性の日本語で読み上げてください",
         voice: { pitch: 0.88, rate: 1.03, isMale: true },
         assets: {
           neutral: "images/buddies/jinai_neutral.png",
@@ -171,7 +173,8 @@
         emoji: "☕",
         themeColor: "#4b5563",
         lightBg: "#f3f4f6",
-        // 落ち着いたトーン（男性ボイス優先）
+        geminiVoice: "Charon",
+        voiceStylePrompt: "冷静沈着で上品な毒舌執事「アレン」として、丁寧で落ち着いた大人の男性の日本語で読み上げてください",
         voice: { pitch: 0.93, rate: 0.98, isMale: true },
         assets: {
           neutral: "images/buddies/allen_neutral.png",
@@ -215,7 +218,8 @@
         emoji: "☀️",
         themeColor: "#f59e0b",
         lightBg: "#fffbeb",
-        // 元気で明るいトーン（女性ボイス優先）
+        geminiVoice: "Aoede",
+        voiceStylePrompt: "太陽のように明るく元気いっぱいの幼馴染「ソラ」として、フレンドリーで弾むような明るい日本語で読み上げてください",
         voice: { pitch: 1.07, rate: 1.07, isMale: false },
         assets: {
           neutral: "images/buddies/sora_neutral.png",
@@ -259,7 +263,8 @@
         emoji: "🌸",
         themeColor: "#10b981",
         lightBg: "#ecfdf5",
-        // 穏やかで優しいお姉さんトーン（女性ボイス優先）
+        geminiVoice: "Leda",
+        voiceStylePrompt: "包容力に満ちた優しい癒やし系のお姉さん「静香」として、穏やかで温かみのある丁寧な日本語で読み上げてください",
         voice: { pitch: 1.02, rate: 0.94, isMale: false },
         assets: {
           neutral: "images/buddies/shizuka_neutral.png",
@@ -303,7 +308,8 @@
         emoji: "🔍",
         themeColor: "#6366f1",
         lightBg: "#eef2ff",
-        // クールで知的なトーン（女性ボイス優先）
+        geminiVoice: "Kore",
+        voiceStylePrompt: "知的でクールな女性監察官「セレーナ」として、落ち着きのある明瞭で凛とした日本語で読み上げてください",
         voice: { pitch: 0.96, rate: 1.04, isMale: false },
         assets: {
           neutral: "images/buddies/selena_neutral.png",
@@ -358,33 +364,76 @@
     };
 
     // ==========================================
-    // 2. ユーティリティ関数 & ナチュラル音声合成エンジン（アイデア1＋アイデア3）
+    // 2. 【アイデア2＋アイデア3】GeminiダイレクトAI音声生成エンジン & クレンジング
     // ==========================================
-    // 音声リストの事前ウォームアップ（Safari / Chrome 初回無音対策）
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
-    }
+    let sharedAudioCtx = null;
+    let activeAudioSource = null;
+    let activeHtmlAudio = null;
+    let currentSpeechRequestId = 0;
+    const ttsAudioCache = new Map(); // 同じセリフの再通信を防ぐインメモリキャッシュ
 
-    // 非同期通信(AI解析)の前にユーザー操作イベント内で音声ロックを解除する関数
+    const getOrInitAudioContext = () => {
+      if (typeof window === "undefined") return null;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return null;
+      if (!sharedAudioCtx) {
+        sharedAudioCtx = new AudioCtx();
+      }
+      if (sharedAudioCtx.state === "suspended") {
+        sharedAudioCtx.resume();
+      }
+      return sharedAudioCtx;
+    };
+
+    // 進行中のすべての音声（Gemini AI音声・ブラウザTTS）を即座に停止
+    const stopAllActiveAudio = () => {
+      if (activeAudioSource) {
+        try {
+          activeAudioSource.stop();
+          activeAudioSource.disconnect();
+        } catch (e) {}
+        activeAudioSource = null;
+      }
+      if (activeHtmlAudio) {
+        try {
+          activeHtmlAudio.pause();
+          activeHtmlAudio.currentTime = 0;
+        } catch (e) {}
+        activeHtmlAudio = null;
+      }
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch (e) {}
+      }
+    };
+
+    // スマホの非同期通信(AI生成待ち)前にタップイベント内でWeb Audioのロックを解除
     const unlockSpeechSynthesis = () => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
       try {
-        const silent = new SpeechSynthesisUtterance("");
-        silent.volume = 0;
-        window.speechSynthesis.speak(silent);
+        const ctx = getOrInitAudioContext();
+        if (ctx) {
+          const buffer = ctx.createBuffer(1, 1, 22050);
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          source.start(0);
+        }
       } catch (e) {}
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          const silent = new SpeechSynthesisUtterance("");
+          silent.volume = 0;
+          window.speechSynthesis.speak(silent);
+        } catch (e) {}
+      }
     };
 
     // 【アイデア3】読み上げテキストを自然な日本語発音・息継ぎにクレンジングする関数
     const formatTextForNaturalSpeech = (rawText) => {
       if (!rawText) return "";
       return rawText
-        // 絵文字・装飾記号の除去（絵文字を読み上げて不自然になるのを防ぐ）
         .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "")
-        // 栄養素や単位を自然な日本語読みに変換
         .replace(/kcal/gi, "キロカロリー")
         .replace(/Lv\.?\s*(\d+)/gi, "レベル$1")
         .replace(/\+\s*(\d+)\s*EXP/gi, "プラス$1経験値")
@@ -398,10 +447,8 @@
         .replace(/([\d.]+)\s*g/g, "$1グラム")
         .replace(/100%/g, "ひゃくパーセント")
         .replace(/(\d+)%/g, "$1パーセント")
-        // カッコやスラッシュを読点（息継ぎの間）に変換
         .replace(/[\/／]/g, "、")
         .replace(/[「」『』（）()【】]/g, "、")
-        // 感嘆符・三点リーダーの後に自然な「間」を作る
         .replace(/！+/g, "！ ")
         .replace(/？+/g, "？ ")
         .replace(/…+/g, "、 ")
@@ -409,100 +456,206 @@
         .trim();
     };
 
-    // 利用可能な日本語ボイス一覧を取得するヘルパー
-    const getAvailableJapaneseVoices = () => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
-      const all = window.speechSynthesis.getVoices() || [];
-      return all.filter((v) => v.lang && (v.lang.includes("ja") || v.lang.includes("JP")));
+    // Gemini TTS が返す Raw PCM (16-bit Little Endian, 24kHz, Mono) を WAV バイナリに変換
+    const convertPcmBase64ToWavArrayBuffer = (base64Pcm, sampleRate = 24000) => {
+      const binaryString = atob(base64Pcm);
+      const pcmLen = binaryString.length;
+      const wavBuffer = new ArrayBuffer(44 + pcmLen);
+      const view = new DataView(wavBuffer);
+
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
+        }
+      };
+
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + pcmLen, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true); // PCM chunk size
+      view.setUint16(20, 1, true);  // AudioFormat = 1 (Linear PCM)
+      view.setUint16(22, 1, true);  // NumChannels = 1 (Mono)
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true); // ByteRate
+      view.setUint16(32, 2, true);  // BlockAlign
+      view.setUint16(34, 16, true); // BitsPerSample
+      writeStr(36, "data");
+      view.setUint32(40, pcmLen, true);
+
+      const bytes = new Uint8Array(wavBuffer, 44);
+      for (let i = 0; i < pcmLen; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return wavBuffer;
     };
 
-    // 【アイデア1】端末内で最も自然な高音質ニューラル日本語ボイス（男女別）を自動厳選する関数
-    const selectBestJapaneseVoice = (voices, isMaleCharacter, preferredVoiceURI = "") => {
-      const jpVoices = voices.filter(
-        (v) => v.lang && (v.lang.includes("ja") || v.lang.includes("JP"))
-      );
-      if (jpVoices.length === 0) return null;
+    // WAV ArrayBuffer を Web Audio API (または HTML5 Audio) で再生
+    const playWavArrayBuffer = async (wavArrayBuffer, reqId) => {
+      if (reqId !== currentSpeechRequestId) return;
+      stopAllActiveAudio();
 
-      // ユーザーが設定画面でお気に入りボイスを明示指定している場合はそれを最優先
-      if (preferredVoiceURI) {
-        const userPicked = jpVoices.find((v) => v.voiceURI === preferredVoiceURI || v.name === preferredVoiceURI);
-        if (userPicked) return userPicked;
+      const ctx = getOrInitAudioContext();
+      if (ctx) {
+        try {
+          const bufferCopy = wavArrayBuffer.slice(0);
+          const audioBuffer = await ctx.decodeAudioData(bufferCopy);
+          if (reqId !== currentSpeechRequestId) return;
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+          activeAudioSource = source;
+          source.start(0);
+          return;
+        } catch (err) {
+          console.warn("WebAudio decode fallback to HTML5 Audio:", err);
+        }
       }
 
-      // 男性キャラ・女性キャラ別の高音質ボイス優先キーワード順位
-      const malePriority = ["Keita", "Otoya", "Ichiro", "Takumi", "Daichi", "Google 日本語", "Siri", "Natural", "Online"];
-      const femalePriority = ["Nanami", "Kyoko", "O-Ren", "Hattori", "Google 日本語", "Siri", "Haruka", "Ayumi", "Sayaka", "Natural", "Online"];
-      const priorityList = isMaleCharacter ? malePriority : femalePriority;
-
-      // ステップ1: Online (Natural) / Enhanced / Premium / Siri などのニューラル高音質ボイスを最優先で探す
-      for (const keyword of priorityList) {
-        const neuralMatch = jpVoices.find(
-          (v) =>
-            v.name.includes(keyword) &&
-            (v.name.includes("Natural") ||
-              v.name.includes("Online") ||
-              v.name.includes("Enhanced") ||
-              v.name.includes("Premium") ||
-              v.name.includes("Siri"))
-        );
-        if (neuralMatch) return neuralMatch;
-      }
-
-      // ステップ2: 汎用的なNatural / Online / Enhanced ボイスを探す
-      const anyNeural = jpVoices.find(
-        (v) =>
-          v.name.includes("Natural") ||
-          v.name.includes("Online") ||
-          v.name.includes("Enhanced") ||
-          v.name.includes("Premium")
-      );
-      if (anyNeural && !isMaleCharacter) return anyNeural;
-
-      // ステップ3: キーワードに合致する標準ボイス（Google 日本語 / Kyoko / Otoya 等）を探す
-      for (const keyword of priorityList) {
-        const stdMatch = jpVoices.find((v) => v.name.includes(keyword));
-        if (stdMatch) return stdMatch;
-      }
-
-      return jpVoices[0];
+      // フォールバック: HTML5 Audio要素で再生
+      const blob = new Blob([wavArrayBuffer], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      activeHtmlAudio = audio;
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
     };
 
-    // メイン音声発話関数
-    const speakBuddyDialogue = (text, buddyId, voiceEnabled, preferredVoiceURI = "") => {
-      if (!voiceEnabled || typeof window === "undefined" || !("speechSynthesis" in window) || !text) return;
+    // 【アイデア2本体】Gemini API ダイレクト音声生成リクエスト
+    const fetchGeminiDirectTTS = async (cleanText, buddy, apiKey) => {
+      const cacheKey = `${buddy.id}__${cleanText}`;
+      if (ttsAudioCache.has(cacheKey)) {
+        return ttsAudioCache.get(cacheKey);
+      }
+
+      const voiceName = buddy.geminiVoice || "Zephyr";
+      const ttsModels = [
+        {
+          model: "gemini-2.5-flash-preview-tts",
+          promptText: `${buddy.voiceStylePrompt}。\n読み上げるセリフ: 「${cleanText}」`
+        },
+        {
+          model: "gemini-2.0-flash-exp",
+          promptText: `以下のセリフのみを、${buddy.voiceStylePrompt}。余計な返答は一切せずセリフだけを読み上げてください。\n「${cleanText}」`
+        }
+      ];
+
+      let lastErr = null;
+      for (const item of ttsModels) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${item.model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+          const payload = {
+            contents: [{ parts: [{ text: item.promptText }] }],
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: {
+                    voiceName: voiceName
+                  }
+                }
+              }
+            }
+          };
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) {
+            const errTxt = await res.text();
+            throw new Error(`TTS HTTP ${res.status}: ${errTxt}`);
+          }
+
+          const data = await res.json();
+          const parts = data?.candidates?.[0]?.content?.parts || [];
+          const audioPart = parts.find((p) => p.inlineData && p.inlineData.data);
+
+          if (!audioPart) {
+            throw new Error("Audio inlineData not found in Gemini response");
+          }
+
+          const mime = audioPart.inlineData.mimeType || "audio/pcm;rate=24000";
+          const rateMatch = mime.match(/rate=(\d+)/i);
+          const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+
+          const wavBuffer = convertPcmBase64ToWavArrayBuffer(audioPart.inlineData.data, sampleRate);
+          // メモリ肥大化防止のため最大30件までキャッシュ
+          if (ttsAudioCache.size > 30) {
+            const firstKey = ttsAudioCache.keys().next().value;
+            ttsAudioCache.delete(firstKey);
+          }
+          ttsAudioCache.set(cacheKey, wavBuffer);
+          return wavBuffer;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr || new Error("Gemini TTS failed");
+    };
+
+    // APIキー未設定時用のブラウザ内蔵TTSフォールバック
+    const speakBrowserFallbackTTS = (cleanText, buddyId) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window) || !cleanText) return;
       try {
         const synth = window.speechSynthesis;
         synth.cancel();
-        if (synth.paused) synth.resume();
-
-        const cleanText = formatTextForNaturalSpeech(text);
-        if (!cleanText) return;
-
         const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.lang = "ja-JP";
-        utterance.volume = 1.0;
+        const cfg = BUDDY_DEFINITIONS[buddyId]?.voice || { pitch: 1.0, rate: 1.0, isMale: false };
+        utterance.pitch = cfg.pitch;
+        utterance.rate = cfg.rate;
 
-        const voiceConfig = BUDDY_DEFINITIONS[buddyId]?.voice || { pitch: 1.0, rate: 1.0, isMale: false };
-        utterance.pitch = voiceConfig.pitch;
-        utterance.rate = voiceConfig.rate;
+        const voices = synth.getVoices() || [];
+        const jpVoices = voices.filter((v) => v.lang && (v.lang.includes("ja") || v.lang.includes("JP")));
+        if (jpVoices.length > 0) {
+          const preferred = jpVoices.find(
+            (v) => v.name.includes("Natural") || v.name.includes("Online") || v.name.includes("Google") || v.name.includes("Kyoko") || v.name.includes("Otoya")
+          );
+          utterance.voice = preferred || jpVoices[0];
+        }
+        setTimeout(() => synth.speak(utterance), 40);
+      } catch (e) {}
+    };
 
-        const voices = synth.getVoices();
-        if (voices && voices.length > 0) {
-          const bestVoice = selectBestJapaneseVoice(voices, voiceConfig.isMale, preferredVoiceURI);
-          if (bestVoice) {
-            utterance.voice = bestVoice;
+    // 統合音声発話関数（Gemini APIキーがあればGemini AIリアル音声、なければブラウザTTS）
+    const speakBuddyDialogue = async (text, buddyId, voiceEnabled, apiKey = "", onLoadingChange = null) => {
+      if (!voiceEnabled || !text) return;
+      const reqId = ++currentSpeechRequestId;
+      stopAllActiveAudio();
+
+      const cleanText = formatTextForNaturalSpeech(text);
+      if (!cleanText) return;
+
+      const buddy = BUDDY_DEFINITIONS[buddyId] || BUDDY_DEFINITIONS.riko;
+
+      if (apiKey && apiKey.trim().length > 10) {
+        try {
+          if (onLoadingChange) onLoadingChange(true);
+          const wavBuffer = await fetchGeminiDirectTTS(cleanText, buddy, apiKey);
+          if (reqId !== currentSpeechRequestId) return;
+          await playWavArrayBuffer(wavBuffer, reqId);
+          return;
+        } catch (err) {
+          console.warn("Gemini AI TTS failed, falling back to browser speech:", err);
+          if (reqId === currentSpeechRequestId) {
+            speakBrowserFallbackTTS(cleanText, buddyId);
+          }
+        } finally {
+          if (onLoadingChange && reqId === currentSpeechRequestId) {
+            onLoadingChange(false);
           }
         }
-
-        // cancel()直後にspeak()すると消えるブラウザバグを防ぐため45ms遅延
-        setTimeout(() => {
-          synth.speak(utterance);
-        }, 45);
-      } catch (err) {
-        console.warn("Speech synthesis failed:", err);
+      } else {
+        speakBrowserFallbackTTS(cleanText, buddyId);
       }
     };
 
+    // ==========================================
+    // 3. 日付・栄養計算・画像圧縮・Geminiテキスト解析ユーティリティ
+    // ==========================================
     const getJSTDateString = (dateObj = new Date()) => {
       const jstOffset = 9 * 60;
       const localOffset = dateObj.getTimezoneOffset();
@@ -742,7 +895,7 @@
     };
 
     // ==========================================
-    // 3. キャラクター立ち絵 & フォールバックSVGアバター
+    // 4. キャラクター立ち絵 & フォールバックSVGアバター
     // ==========================================
     const BuddyAvatar = ({ buddy, emotion = "neutral", level = 1, expPercent = 0, onClick, size = "md" }) => {
       const [imgError, setImgError] = useState(false);
@@ -823,15 +976,13 @@
     };
 
     // ==========================================
-    // 4. 初期設定＆プロフィール編集モーダル（日本語ボイス選択＆試聴機能つき）
+    // 5. 初期設定＆プロフィール編集モーダル（Gemini AI音声試聴機能つき）
     // ==========================================
     const ProfileOnboardingModal = ({ isOpen, initialData, isForced, onSave, onClose }) => {
       if (!isOpen) return null;
 
       const profile = initialData?.user_profile || {};
       const [apiKey, setApiKey] = useState(initialData?.api_key || "");
-      const [preferredVoiceURI, setPreferredVoiceURI] = useState(initialData?.preferred_voice_uri || "");
-      const [availableVoices, setAvailableVoices] = useState([]);
       const [nickname, setNickname] = useState(profile.nickname || "");
       const [gender, setGender] = useState(profile.gender || "male");
       const [age, setAge] = useState(profile.age || 35);
@@ -840,17 +991,8 @@
       const [targetWeight, setTargetWeight] = useState(profile.target_weight || 62);
       const [activityLevel, setActivityLevel] = useState(profile.activity_level || 2);
       const [selectedBuddy, setSelectedBuddy] = useState(profile.selected_buddy || "riko");
+      const [isTestingVoice, setIsTestingVoice] = useState(false);
       const [errorMsg, setErrorMsg] = useState("");
-
-      useEffect(() => {
-        const updateVoices = () => {
-          setAvailableVoices(getAvailableJapaneseVoices());
-        };
-        updateVoices();
-        if (typeof window !== "undefined" && "speechSynthesis" in window) {
-          window.speechSynthesis.onvoiceschanged = updateVoices;
-        }
-      }, []);
 
       const previewCalc = useMemo(() => {
         return calculateBMRAndTarget(gender, currentWeight, height, age, activityLevel);
@@ -860,14 +1002,16 @@
         return calculateTargetPFC(previewCalc.targetCalories, gender);
       }, [previewCalc.targetCalories, gender]);
 
-      const handleTestVoice = () => {
+      const handleTestGeminiVoice = () => {
+        unlockSpeechSynthesis();
         const b = BUDDY_DEFINITIONS[selectedBuddy] || BUDDY_DEFINITIONS.riko;
         const sampleText = b.quotes[1][0];
-        speakBuddyDialogue(sampleText, b.id, true, preferredVoiceURI);
+        speakBuddyDialogue(sampleText, b.id, true, apiKey.trim(), setIsTestingVoice);
       };
 
       const handleSubmit = (e) => {
         e.preventDefault();
+        unlockSpeechSynthesis();
         if (!nickname.trim()) {
           setErrorMsg("ニックネームを入力してください。");
           return;
@@ -883,7 +1027,6 @@
 
         onSave({
           apiKey: apiKey.trim(),
-          preferredVoiceURI,
           nickname: nickname.trim(),
           gender,
           age: a,
@@ -897,6 +1040,8 @@
         });
       };
 
+      const activeBuddyObj = BUDDY_DEFINITIONS[selectedBuddy] || BUDDY_DEFINITIONS.riko;
+
       return (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 overflow-y-auto">
           <div className="bg-white w-full max-w-[410px] rounded-2xl shadow-2xl p-5 my-auto animate-pop max-h-[92vh] overflow-y-auto">
@@ -904,7 +1049,7 @@
               <div>
                 <span className="text-xs font-bold text-emerald-600 block">AIコンパニオンと</span>
                 <h2 className="text-lg font-extrabold text-gray-800">
-                  {isForced ? "🎉 はじめにプロフィール設定" : "⚙️ プロフィール・音声・API設定"}
+                  {isForced ? "🎉 はじめにプロフィール設定" : "⚙️ プロフィール・AI音声設定"}
                 </h2>
               </div>
               {!isForced && (
@@ -1031,7 +1176,7 @@
 
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                  担当AIコンパニオン（いつでも交代可能）
+                  担当AIコンパニオン（各キャラ固有のGemini AIボイス割当済）
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {Object.values(BUDDY_DEFINITIONS).map((b) => {
@@ -1051,56 +1196,37 @@
                         <span className="text-xl">{b.emoji}</span>
                         <span className="font-bold text-xs mt-0.5 text-gray-800">{b.name}</span>
                         <span className="text-[10px] text-gray-500">{b.role}</span>
+                        <span className="text-[9px] text-indigo-600 font-mono mt-0.5">🎙️ {b.geminiVoice}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* ナチュラル日本語ボイス選択＆試聴 */}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+              {/* Gemini APIキー & ダイレクトAI音声試聴 */}
+              <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-bold text-gray-700">
-                    🎙️ 日本語読み上げボイスの種類
+                  <label className="block text-xs font-bold text-indigo-900">
+                    🔑 Gemini API キー（AI音声生成＆写真解析）
                   </label>
                   <button
                     type="button"
-                    onClick={handleTestVoice}
-                    className="text-[11px] bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold px-2.5 py-1 rounded-lg transition"
+                    disabled={isTestingVoice}
+                    onClick={handleTestGeminiVoice}
+                    className="text-[11px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold px-2.5 py-1 rounded-lg transition shadow-2xs"
                   >
-                    🔈 今の設定で試聴
+                    {isTestingVoice ? "🎙️ AI音声生成中..." : `🔈 ${activeBuddyObj.name}のAI声を試聴`}
                   </button>
                 </div>
-                <select
-                  value={preferredVoiceURI}
-                  onChange={(e) => setPreferredVoiceURI(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-2.5 py-2 bg-white text-xs"
-                >
-                  <option value="">✨ 自動最適化（キャラの性別に合う高音質ボイスを自動選択）</option>
-                  {availableVoices.map((v, idx) => (
-                    <option key={idx} value={v.voiceURI || v.name}>
-                      {v.name} ({v.lang})
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-gray-500">
-                  ※「Natural」「Online」「Google」「Kyoko」「Otoya」等が含まれるボイスを選ぶとより自然な発音になります。
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Gemini API キー（写真AI解析・AI総評用 / 任意）
-                </label>
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="AIzaSy...（未入力でも手動記録＆ローカルAI動作可）"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono"
+                  placeholder="AIzaSy... を入力するとリアルなAI声優ボイスで喋ります"
+                  className="w-full border border-indigo-200 rounded-lg px-3 py-2 text-xs font-mono bg-white"
                 />
-                <p className="text-[10px] text-gray-500 mt-1">
-                  ※キーはお使いのブラウザ(LocalStorage)にのみ保存されます。
+                <p className="text-[10px] text-indigo-700 leading-relaxed">
+                  ※APIキーを入力すると、機械的なブラウザ音声ではなく <strong>Gemini 2.5 Native TTS（{activeBuddyObj.geminiVoice} ボイス）</strong> で感情豊かに喋ります。
                 </p>
               </div>
 
@@ -1117,7 +1243,7 @@
     };
 
     // ==========================================
-    // 5. 食事記録モーダル
+    // 6. 食事記録モーダル
     // ==========================================
     const MealRecordModal = ({
       isOpen,
@@ -1547,7 +1673,7 @@
     };
 
     // ==========================================
-    // 6. 週間分析レポート＆バディ交代モーダル
+    // 7. 週間分析レポート＆バディ交代モーダル
     // ==========================================
     const WeeklyReportModal = ({
       isOpen,
@@ -1905,7 +2031,7 @@
                       onClick={() => onUpdateBuddySpeech(weeklyReviewData.weekly_review, weeklyReviewData.emotion, true)}
                       className="text-[11px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md font-bold"
                     >
-                      🔈 音声で聴く
+                      🔈 AI音声で聴く
                     </button>
                   </div>
                   <p className="text-gray-700 leading-relaxed">{weeklyReviewData.weekly_review}</p>
@@ -1919,7 +2045,7 @@
 
             <div className="border-t pt-3">
               <h4 className="text-xs font-bold text-gray-700 mb-2">
-                🤝 AIコンパニオン交代（個別レベル・親愛度保持）
+                🤝 AIコンパニオン交代（個別レベル・固有AIボイス）
               </h4>
               <div className="grid grid-cols-2 gap-2">
                 {Object.values(BUDDY_DEFINITIONS).map((b) => {
@@ -1978,7 +2104,7 @@
     };
 
     // ==========================================
-    // 7. メインアプリケーションコンポーネント
+    // 8. メインアプリケーションコンポーネント
     // ==========================================
     const App = () => {
       const todayStr = useMemo(() => getJSTDateString(), []);
@@ -1999,7 +2125,6 @@
             const parsed = JSON.parse(saved);
             return {
               api_key: parsed.api_key || "",
-              preferred_voice_uri: parsed.preferred_voice_uri || "",
               voice_enabled: parsed.voice_enabled ?? true,
               user_profile: parsed.user_profile || null,
               buddy_progress: { ...defaultBuddyProgress, ...(parsed.buddy_progress || {}) },
@@ -2016,7 +2141,6 @@
 
         return {
           api_key: "",
-          preferred_voice_uri: "",
           voice_enabled: true,
           user_profile: null,
           buddy_progress: defaultBuddyProgress,
@@ -2032,6 +2156,7 @@
 
       const [buddyEmotion, setBuddyEmotion] = useState("neutral");
       const [buddyDialogue, setBuddyDialogue] = useState("");
+      const [isGeneratingSpeech, setIsGeneratingSpeech] = useState(false);
       const [toastNotice, setToastNotice] = useState(null);
 
       const [isProfileModalOpen, setIsProfileModalOpen] = useState(() => !appData.user_profile);
@@ -2115,7 +2240,7 @@
           setBuddyEmotion("angry");
           setBuddyDialogue(scoldText);
           setTimeout(() => {
-            speakBuddyDialogue(scoldText, buddy.id, appData.voice_enabled, appData.preferred_voice_uri);
+            speakBuddyDialogue(scoldText, buddy.id, appData.voice_enabled, appData.api_key, setIsGeneratingSpeech);
           }, 300);
         } else if (bonusAwarded) {
           const msg = `昨日の摂取カロリーが目標範囲内だったので、達成ボーナス +30 EXP を獲得しました！${buddy.quotes[currentExpInfo.level]?.[0] || ""}`;
@@ -2123,7 +2248,7 @@
           setBuddyDialogue(msg);
           showToast("🎉 前日目標カロリー達成ボーナス +30 EXP！");
           setTimeout(() => {
-            speakBuddyDialogue(msg, buddy.id, appData.voice_enabled, appData.preferred_voice_uri);
+            speakBuddyDialogue(msg, buddy.id, appData.voice_enabled, appData.api_key, setIsGeneratingSpeech);
           }, 300);
         } else {
           const lvQuotes = buddy.quotes[currentExpInfo.level] || buddy.quotes[1];
@@ -2137,11 +2262,12 @@
         setBuddyEmotion(emotion);
         setBuddyDialogue(text);
         if (shouldSpeak) {
-          speakBuddyDialogue(text, currentBuddy.id, appData.voice_enabled, appData.preferred_voice_uri);
+          speakBuddyDialogue(text, currentBuddy.id, appData.voice_enabled, appData.api_key, setIsGeneratingSpeech);
         }
       };
 
       const handleTapBuddyAvatar = () => {
+        unlockSpeechSynthesis();
         const lv = currentExpInfo.level;
         const pool = [];
         for (let i = 1; i <= lv; i++) {
@@ -2158,8 +2284,9 @@
       const toggleVoiceEnabled = () => {
         setAppData((prev) => {
           const nextVal = !prev.voice_enabled;
-          if (!nextVal && "speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
+          if (!nextVal) {
+            stopAllActiveAudio();
+            setIsGeneratingSpeech(false);
           }
           return { ...prev, voice_enabled: nextVal };
         });
@@ -2322,7 +2449,6 @@
         setAppData((prev) => ({
           ...prev,
           api_key: formValues.apiKey,
-          preferred_voice_uri: formValues.preferredVoiceURI || "",
           user_profile: newProfile
         }));
 
@@ -2331,10 +2457,10 @@
         const newBuddy = BUDDY_DEFINITIONS[formValues.selectedBuddy] || BUDDY_DEFINITIONS.riko;
         const greet = isFirstSetup
           ? `${formValues.nickname}さん、はじめまして！${newBuddy.name}です！目標${formValues.targetWeight}kg、1日${formValues.targetCalories}kcal目標に向けて、今日から一緒に頑張りましょうね！`
-          : `プロフィールと音声設定を更新しましたよ！引き続き目標に向けて一緒に頑張りましょう！`;
+          : `プロフィール設定を更新しましたよ！引き続き目標に向けて一緒に頑張りましょう！`;
         setBuddyEmotion("smile");
         setBuddyDialogue(greet);
-        speakBuddyDialogue(greet, newBuddy.id, appData.voice_enabled, formValues.preferredVoiceURI || "");
+        speakBuddyDialogue(greet, newBuddy.id, appData.voice_enabled, formValues.apiKey, setIsGeneratingSpeech);
       };
 
       const handleSaveMealRecord = (newMeal) => {
@@ -2432,7 +2558,7 @@
         const quote = nextB.quotes[lv]?.[0] || nextB.quotes[1][0];
         setBuddyEmotion("smile");
         setBuddyDialogue(quote);
-        speakBuddyDialogue(quote, newBuddyId, appData.voice_enabled, appData.preferred_voice_uri);
+        speakBuddyDialogue(quote, newBuddyId, appData.voice_enabled, appData.api_key, setIsGeneratingSpeech);
         showToast(`🤝 パートナーを「${nextB.name}」に交代しました！`);
       };
 
@@ -2471,7 +2597,7 @@
                       : "bg-gray-100 text-gray-500 border-gray-200"
                   }`}
                 >
-                  <span>{appData.voice_enabled ? "🔊 音声ON" : "🔇 音声OFF"}</span>
+                  <span>{appData.voice_enabled ? "🔊 AI音声ON" : "🔇 音声OFF"}</span>
                 </button>
 
                 <button
@@ -2592,14 +2718,22 @@
 
                 <div className="flex items-center justify-between pt-2 mt-1 border-t border-gray-100">
                   <span className="text-[10px] text-gray-400">
-                    EXP {currentExpInfo.current} / {currentExpInfo.next}
+                    {isGeneratingSpeech ? (
+                      <span className="text-indigo-600 font-bold animate-pulse">🎙️ AI音声生成中...</span>
+                    ) : (
+                      <span>EXP {currentExpInfo.current} / {currentExpInfo.next}</span>
+                    )}
                   </span>
                   <button
                     type="button"
-                    onClick={() => speakBuddyDialogue(buddyDialogue, currentBuddy.id, true, appData.preferred_voice_uri)}
-                    className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md flex items-center gap-1 transition"
+                    disabled={isGeneratingSpeech}
+                    onClick={() => {
+                      unlockSpeechSynthesis();
+                      speakBuddyDialogue(buddyDialogue, currentBuddy.id, true, appData.api_key, setIsGeneratingSpeech);
+                    }}
+                    className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 px-2 py-0.5 rounded-md flex items-center gap-1 transition"
                   >
-                    <span>🔈 再生</span>
+                    <span>🔈 {isGeneratingSpeech ? "生成中" : "AI再生"}</span>
                   </button>
                 </div>
               </div>
@@ -2609,6 +2743,9 @@
               <div className="flex items-center gap-1.5 font-bold text-gray-700">
                 <span>{currentBuddy.emoji}</span>
                 <span>{currentBuddy.name}とダイエット伴走コース</span>
+                <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded font-mono">
+                  🎙️ {currentBuddy.geminiVoice}
+                </span>
               </div>
               <button
                 type="button"
@@ -2726,7 +2863,7 @@
                   <span>
                     {isAnalyzingDaily
                       ? `${currentBuddy.name}が1日の栄養バランスを分析中...`
-                      : "アドバイス（1日の総合AI分析＆音声読み上げ）"}
+                      : "アドバイス（1日の総合AI分析＆AI音声読み上げ）"}
                   </span>
                 </button>
               </div>
