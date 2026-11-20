@@ -23,30 +23,32 @@
     .speech-bubble {
       position: relative;
       background: #ffffff;
-      border-radius: 16px;
+      border-radius: 18px;
       border: 2px solid #e5e7eb;
     }
     .speech-bubble::before {
       content: '';
       position: absolute;
-      left: -10px;
-      top: 28px;
+      top: -11px;
+      left: 50%;
+      transform: translateX(-50%);
       width: 0;
       height: 0;
-      border-top: 8px solid transparent;
-      border-bottom: 8px solid transparent;
-      border-right: 10px solid #e5e7eb;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-bottom: 11px solid #e5e7eb;
     }
     .speech-bubble::after {
       content: '';
       position: absolute;
-      left: -7px;
-      top: 28px;
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
       width: 0;
       height: 0;
-      border-top: 8px solid transparent;
-      border-bottom: 8px solid transparent;
-      border-right: 10px solid #ffffff;
+      border-left: 9px solid transparent;
+      border-right: 9px solid transparent;
+      border-bottom: 10px solid #ffffff;
     }
     @keyframes popIn {
       0% { transform: scale(0.95); opacity: 0; }
@@ -364,13 +366,13 @@
     };
 
     // ==========================================
-    // 2. 【アイデア2＋アイデア3】GeminiダイレクトAI音声生成エンジン & クレンジング
+    // 2. GeminiダイレクトAI音声生成エンジン & クレンジング
     // ==========================================
     let sharedAudioCtx = null;
     let activeAudioSource = null;
     let activeHtmlAudio = null;
     let currentSpeechRequestId = 0;
-    const ttsAudioCache = new Map(); // 同じセリフの再通信を防ぐインメモリキャッシュ
+    const ttsAudioCache = new Map();
 
     const getOrInitAudioContext = () => {
       if (typeof window === "undefined") return null;
@@ -385,7 +387,6 @@
       return sharedAudioCtx;
     };
 
-    // 進行中のすべての音声（Gemini AI音声・ブラウザTTS）を即座に停止
     const stopAllActiveAudio = () => {
       if (activeAudioSource) {
         try {
@@ -408,7 +409,6 @@
       }
     };
 
-    // スマホの非同期通信(AI生成待ち)前にタップイベント内でWeb Audioのロックを解除
     const unlockSpeechSynthesis = () => {
       try {
         const ctx = getOrInitAudioContext();
@@ -429,7 +429,6 @@
       }
     };
 
-    // 【アイデア3】読み上げテキストを自然な日本語発音・息継ぎにクレンジングする関数
     const formatTextForNaturalSpeech = (rawText) => {
       if (!rawText) return "";
       return rawText
@@ -456,7 +455,6 @@
         .trim();
     };
 
-    // Gemini TTS が返す Raw PCM (16-bit Little Endian, 24kHz, Mono) を WAV バイナリに変換
     const convertPcmBase64ToWavArrayBuffer = (base64Pcm, sampleRate = 24000) => {
       const binaryString = atob(base64Pcm);
       const pcmLen = binaryString.length;
@@ -473,13 +471,13 @@
       view.setUint32(4, 36 + pcmLen, true);
       writeStr(8, "WAVE");
       writeStr(12, "fmt ");
-      view.setUint32(16, 16, true); // PCM chunk size
-      view.setUint16(20, 1, true);  // AudioFormat = 1 (Linear PCM)
-      view.setUint16(22, 1, true);  // NumChannels = 1 (Mono)
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
       view.setUint32(24, sampleRate, true);
-      view.setUint32(28, sampleRate * 2, true); // ByteRate
-      view.setUint16(32, 2, true);  // BlockAlign
-      view.setUint16(34, 16, true); // BitsPerSample
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
       writeStr(36, "data");
       view.setUint32(40, pcmLen, true);
 
@@ -490,7 +488,6 @@
       return wavBuffer;
     };
 
-    // WAV ArrayBuffer を Web Audio API (または HTML5 Audio) で再生
     const playWavArrayBuffer = async (wavArrayBuffer, reqId) => {
       if (reqId !== currentSpeechRequestId) return;
       stopAllActiveAudio();
@@ -512,7 +509,6 @@
         }
       }
 
-      // フォールバック: HTML5 Audio要素で再生
       const blob = new Blob([wavArrayBuffer], { type: "audio/wav" });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -521,7 +517,6 @@
       await audio.play();
     };
 
-    // 【アイデア2本体】Gemini API ダイレクト音声生成リクエスト
     const fetchGeminiDirectTTS = async (cleanText, buddy, apiKey) => {
       const cacheKey = `${buddy.id}__${cleanText}`;
       if (ttsAudioCache.has(cacheKey)) {
@@ -582,7 +577,6 @@
           const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
 
           const wavBuffer = convertPcmBase64ToWavArrayBuffer(audioPart.inlineData.data, sampleRate);
-          // メモリ肥大化防止のため最大30件までキャッシュ
           if (ttsAudioCache.size > 30) {
             const firstKey = ttsAudioCache.keys().next().value;
             ttsAudioCache.delete(firstKey);
@@ -596,7 +590,6 @@
       throw lastErr || new Error("Gemini TTS failed");
     };
 
-    // APIキー未設定時用のブラウザ内蔵TTSフォールバック
     const speakBrowserFallbackTTS = (cleanText, buddyId) => {
       if (typeof window === "undefined" || !("speechSynthesis" in window) || !cleanText) return;
       try {
@@ -620,7 +613,6 @@
       } catch (e) {}
     };
 
-    // 統合音声発話関数（Gemini APIキーがあればGemini AIリアル音声、なければブラウザTTS）
     const speakBuddyDialogue = async (text, buddyId, voiceEnabled, apiKey = "", onLoadingChange = null) => {
       if (!voiceEnabled || !text) return;
       const reqId = ++currentSpeechRequestId;
@@ -895,9 +887,9 @@
     };
 
     // ==========================================
-    // 4. キャラクター立ち絵 & フォールバックSVGアバター
+    // 4. キャラクター立ち絵 & フォールバックSVGアバター（縦横2.5倍・中央配置対応）
     // ==========================================
-    const BuddyAvatar = ({ buddy, emotion = "neutral", level = 1, expPercent = 0, onClick, size = "md" }) => {
+    const BuddyAvatar = ({ buddy, emotion = "neutral", level = 1, expPercent = 0, onClick }) => {
       const [imgError, setImgError] = useState(false);
       const assetPath = buddy?.assets?.[emotion] || buddy?.assets?.neutral;
 
@@ -906,7 +898,6 @@
       }, [buddy?.id, emotion]);
 
       const meta = EMOTION_META[emotion] || EMOTION_META.neutral;
-      const sizeClasses = size === "lg" ? "w-28 h-28" : size === "sm" ? "w-14 h-14" : "w-24 h-24";
 
       return (
         <div
@@ -914,8 +905,9 @@
           className="flex flex-col items-center cursor-pointer select-none group relative"
           title="タップして会話する"
         >
+          {/* 縦横2.5倍（96px → 240px）のメインキャラクター枠 */}
           <div
-            className={`${sizeClasses} rounded-2xl relative flex items-center justify-center shadow-md transition-transform active:scale-95 overflow-hidden border-2`}
+            className="w-[240px] h-[240px] rounded-3xl relative flex items-center justify-center shadow-lg transition-transform active:scale-95 overflow-hidden border-[3px]"
             style={{
               borderColor: buddy.themeColor,
               background: `linear-gradient(145deg, #ffffff 0%, ${buddy.lightBg || "#f3f4f6"} 100%)`
@@ -952,23 +944,25 @@
               </svg>
             )}
 
+            {/* Lvバッジ */}
             <div
-              className="absolute top-1 left-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold text-white shadow"
+              className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-lg text-xs font-extrabold text-white shadow-md"
               style={{ backgroundColor: buddy.themeColor }}
             >
               Lv.{level} {level >= 5 ? "👑" : ""}
             </div>
           </div>
 
-          <div className="w-24 mt-1.5">
-            <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+          {/* 拡大イラストに合わせたEXPバー＆タップ案内 */}
+          <div className="w-[240px] mt-2">
+            <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden shadow-inner">
               <div
                 className="h-full transition-all duration-300"
                 style={{ width: `${expPercent}%`, backgroundColor: buddy.themeColor }}
               />
             </div>
-            <div className="text-[10px] text-center text-gray-500 font-medium mt-0.5">
-              タップで会話 💬
+            <div className="text-[11px] text-center text-gray-500 font-bold mt-1">
+              イラストをタップで会話 💬
             </div>
           </div>
         </div>
@@ -976,7 +970,7 @@
     };
 
     // ==========================================
-    // 5. 初期設定＆プロフィール編集モーダル（Gemini AI音声試聴機能つき）
+    // 5. 初期設定＆プロフィール編集モーダル
     // ==========================================
     const ProfileOnboardingModal = ({ isOpen, initialData, isForced, onSave, onClose }) => {
       if (!isOpen) return null;
@@ -1203,7 +1197,6 @@
                 </div>
               </div>
 
-              {/* Gemini APIキー & ダイレクトAI音声試聴 */}
               <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-indigo-900">
@@ -2685,9 +2678,10 @@
           </header>
 
           {/* メインコンテンツ */}
-          <main className="px-3.5 pt-3 space-y-3.5 flex-1">
-            {/* 画面2: AIコンパニオン吹き出し & コースバー & 栄養タブパネル */}
-            <section className="flex items-start gap-3">
+          <main className="px-3.5 pt-4 space-y-3.5 flex-1">
+            {/* 画面2: 中央配置＆2.5倍拡大AIコンパニオン ＋ 下部吹き出しエリア */}
+            <section className="flex flex-col items-center gap-3.5">
+              {/* 中央: 2.5倍拡大バディ立ち絵 */}
               {React.createElement(BuddyAvatar, {
                 buddy: currentBuddy,
                 emotion: buddyEmotion,
@@ -2696,14 +2690,15 @@
                 onClick: handleTapBuddyAvatar
               })}
 
-              <div className="flex-1 speech-bubble p-3 shadow-xs min-h-[108px] flex flex-col justify-between">
+              {/* キャラクター下部: ワイド吹き出しボックス */}
+              <div className="w-full speech-bubble p-3.5 shadow-sm min-h-[104px] flex flex-col justify-between">
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] font-extrabold" style={{ color: currentBuddy.themeColor }}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-extrabold" style={{ color: currentBuddy.themeColor }}>
                       {currentBuddy.name}（{currentBuddy.role}）
                     </span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                         (EMOTION_META[buddyEmotion] || EMOTION_META.neutral).badgeBg
                       }`}
                     >
@@ -2711,13 +2706,13 @@
                       {(EMOTION_META[buddyEmotion] || EMOTION_META.neutral).label}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-700 leading-relaxed font-medium">
+                  <p className="text-[13px] text-gray-700 leading-relaxed font-medium">
                     {buddyDialogue || "今日も一日、食事と健康の記録を一緒に頑張りましょう！"}
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 mt-1 border-t border-gray-100">
-                  <span className="text-[10px] text-gray-400">
+                <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-gray-100">
+                  <span className="text-[11px] text-gray-400">
                     {isGeneratingSpeech ? (
                       <span className="text-indigo-600 font-bold animate-pulse">🎙️ AI音声生成中...</span>
                     ) : (
@@ -2731,7 +2726,7 @@
                       unlockSpeechSynthesis();
                       speakBuddyDialogue(buddyDialogue, currentBuddy.id, true, appData.api_key, setIsGeneratingSpeech);
                     }}
-                    className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 px-2 py-0.5 rounded-md flex items-center gap-1 transition"
+                    className="text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 px-3 py-1 rounded-lg flex items-center gap-1 transition"
                   >
                     <span>🔈 {isGeneratingSpeech ? "生成中" : "AI再生"}</span>
                   </button>
